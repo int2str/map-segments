@@ -1,13 +1,9 @@
 allow-branch = ["main"]
 
 push = true
-push-tags = true
+publish = true
 
-tag = true
 tag-name = "v{{version}}"
 tag-message = "Version {{version}}"
 
-commit = true
-commit-message = "Release: Version {{version}}"
-
-publish = true
+pre-release-commit-message = "Release: Version {{version}}"
