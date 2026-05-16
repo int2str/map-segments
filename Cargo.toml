@@ -1,0 +1,21 @@
+[package]
+name = "map-segments"
+version = "0.1.0"
+edition = "2024"
+authors = ["Andre Eisenbach <git@4ae.us>"]
+license = "GPL-3.0-only"
+description = "Cargo subcommand to visualise ELF memory section layout against a linker memory map"
+readme = "README.md"
+keywords = ["embedded", "elf", "linker", "memory", "cargo-subcommand"]
+categories = ["command-line-utilities", "development-tools", "embedded"]
+exclude = ["sections.out"]
+
+[[bin]]
+name = "cargo-map-segments"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+object = "0.39.1"
+regex = "1.12"
+terminal_size = "0.4"
