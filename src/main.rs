@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
+use cargo_metadata::Message;
 use clap::Parser;
 use object::{Object, ObjectSection, SectionKind};
 use terminal_size::{Width, terminal_size};
@@ -17,7 +19,18 @@ mod memory_map;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Arguments {
-    binary_file: PathBuf,
+    /// Binary target to build and analyse. If neither --bin nor --example is
+    /// given, the first executable artifact produced by `cargo build` is used.
+    #[arg(long, conflicts_with = "example")]
+    bin: Option<String>,
+
+    /// Example target to build and analyse.
+    #[arg(long, conflicts_with = "bin")]
+    example: Option<String>,
+
+    /// Build in release mode (default: debug).
+    #[arg(long)]
+    release: bool,
 
     /// Path to a memory.x linker script. If omitted, the sibling <binary>.d
     /// dependency file is parsed to locate memory.x automatically.
@@ -31,18 +44,30 @@ struct Arguments {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let arguments = Arguments::parse();
+    // When invoked as `cargo map-segments`, Cargo inserts "map-segments" as
+    // argv[1]. Skip it so Clap sees the same args whether called directly or
+    // via cargo.
+    let args = std::env::args_os().enumerate().filter_map(|(i, arg)| {
+        if i == 1 && arg == "map-segments" {
+            None
+        } else {
+            Some(arg)
+        }
+    });
+    let arguments = Arguments::parse_from(args);
+
+    let elf_path = build_and_find_elf(&arguments)?;
 
     let map_path = arguments
         .memory_map
-        .or_else(|| find_memory_x_via_dep_file(&arguments.binary_file));
+        .or_else(|| find_memory_x_via_dep_file(&elf_path));
 
     let map_path = map_path.ok_or(
         "No memory.x found. A <binary>.d dependency file was not found or contained no \
          memory.x entry. Use --memory-map <PATH> to specify one explicitly.",
     )?;
 
-    let sections = read_sections(arguments.binary_file)?;
+    let sections = read_sections(elf_path)?;
     let memory_map = memory_map::from_memory_x(&map_path)?;
     let width = resolve_width(arguments.width);
     map_sections(&sections, &memory_map, width);
@@ -50,15 +75,61 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Run `cargo build --message-format=json` and return the path to the produced
+/// executable artifact. Stderr (build progress) is forwarded to the terminal.
+fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Error>> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--message-format=json"]);
+
+    if let Some(bin) = &arguments.bin {
+        cmd.args(["--bin", bin]);
+    } else if let Some(example) = &arguments.example {
+        cmd.args(["--example", example]);
+    }
+
+    if arguments.release {
+        cmd.arg("--release");
+    }
+
+    cmd.stdout(Stdio::piped());
+    // Forward build progress / errors to the terminal.
+    cmd.stderr(Stdio::inherit());
+
+    let mut child = cmd.spawn()?;
+    let stdout = child.stdout.take().expect("stdout was piped");
+
+    let mut elf_path: Option<PathBuf> = None;
+    let mut artifact_count = 0usize;
+
+    for message in Message::parse_stream(std::io::BufReader::new(stdout)) {
+        if let Message::CompilerArtifact(artifact) = message?
+            && let Some(executable) = artifact.executable
+        {
+            artifact_count += 1;
+            if elf_path.is_none() {
+                elf_path = Some(executable.into());
+            }
+        }
+    }
+
+    let status = child.wait()?;
+    if !status.success() {
+        return Err("cargo build failed".into());
+    }
+
+    if artifact_count > 1 && arguments.bin.is_none() && arguments.example.is_none() {
+        eprintln!(
+            "Warning: multiple executable artifacts found; using the first one. \
+             Use --bin <NAME> to select a specific target."
+        );
+    }
+
+    elf_path.ok_or_else(|| "cargo build produced no executable artifact".into())
+}
+
 /// Locate memory.x by parsing the Cargo-generated `<binary>.d` dependency file
 /// that sits alongside the ELF binary. Returns `None` if the .d file is absent,
 /// unreadable, or contains no unambiguous memory.x reference.
-fn resolve_width(override_width: Option<usize>) -> usize {
-    override_width
-        .or_else(|| terminal_size().map(|(Width(w), _)| w as usize))
-        .unwrap_or(120)
-}
-
 fn find_memory_x_via_dep_file(elf: &std::path::Path) -> Option<PathBuf> {
     // <dir>/<name>.d lives next to the ELF binary.
     let dep_file = elf.with_extension("d");
@@ -102,6 +173,12 @@ fn find_memory_x_via_dep_file(elf: &std::path::Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+fn resolve_width(override_width: Option<usize>) -> usize {
+    override_width
+        .or_else(|| terminal_size().map(|(Width(w), _)| w as usize))
+        .unwrap_or(120)
 }
 
 fn read_sections(filename: PathBuf) -> Result<Vec<SectionInfo>, Box<dyn Error>> {
