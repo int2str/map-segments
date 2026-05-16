@@ -1,20 +1,31 @@
+//! # cargo-map-segments
+//!
+//! A Cargo subcommand that visualises how ELF binary sections are laid out across
+//! the memory regions defined in a linker script (`memory.x`).
+//!
+//! ## Usage
+//!
+//! ```bash
+//! cargo map-segments
+//! cargo map-segments --bin my-app
+//! cargo map-segments --bin my-app --release
+//! cargo map-segments -m path-to/memory.x
+//! ```
+//!
+//! See the [README](../README.md) for details.
+
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use cargo_metadata::Message;
 use clap::Parser;
-use object::{Object, ObjectSection, SectionKind};
 use terminal_size::{Width, terminal_size};
 
-#[derive(Debug)]
-struct SectionInfo {
-    name: String,
-    address: u64,
-    size: u64,
-}
-
 mod memory_map;
+mod sections;
+
+use sections::SectionInfo;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -67,7 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
          memory.x entry. Use --memory-map <PATH> to specify one explicitly.",
     )?;
 
-    let sections = read_sections(elf_path)?;
+    let sections = sections::from_object_file(elf_path)?;
     let memory_map = memory_map::from_memory_x(&map_path)?;
     let width = resolve_width(arguments.width);
     map_sections(&sections, &memory_map, width);
@@ -181,36 +192,6 @@ fn resolve_width(override_width: Option<usize>) -> usize {
         .unwrap_or(120)
 }
 
-fn read_sections(filename: PathBuf) -> Result<Vec<SectionInfo>, Box<dyn Error>> {
-    let binary_file = std::fs::read(filename)?;
-    let object_file = object::File::parse(&*binary_file)?;
-
-    let mut sections: Vec<SectionInfo> = object_file
-        .sections()
-        .filter(|section| section.size() != 0)
-        .filter(|section| {
-            matches!(
-                section.kind(),
-                SectionKind::Text
-                    | SectionKind::Data
-                    | SectionKind::ReadOnlyData
-                    | SectionKind::ReadOnlyString
-                    | SectionKind::UninitializedData
-                    | SectionKind::Common
-                    | SectionKind::Tls
-                    | SectionKind::UninitializedTls
-            )
-        })
-        .map(|section| SectionInfo {
-            name: section.name().unwrap_or("").to_string(),
-            address: section.address(),
-            size: section.size(),
-        })
-        .collect();
-    sections.sort_by_key(|s| s.address);
-    Ok(sections)
-}
-
 fn longest_section_name(sections: &[SectionInfo]) -> usize {
     sections
         .iter()
@@ -225,7 +206,7 @@ fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
     let mut last_region: Option<u64> = None;
 
     for section in sections {
-        let region = map.regions.iter().find(|region| {
+        let region = map.iter().find(|region| {
             let region_start = region.start;
             let region_end = region.start + region.length;
             region_start <= section.address && region_end >= (section.address + section.size)
