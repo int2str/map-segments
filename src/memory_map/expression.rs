@@ -86,7 +86,7 @@ fn lookup(
 }
 
 /// Parse a plain numeric literal with an optional `K` or `M` suffix.
-fn parse_literal(s: &str) -> Result<u64, Box<dyn Error>> {
+pub(super) fn parse_literal(s: &str) -> Result<u64, Box<dyn Error>> {
     let re = Regex::new(r"(?i)^(0x[0-9a-f]+|\d+)\s*([km]?)$").unwrap();
     let groups = re
         .captures(s.trim())
@@ -107,3 +107,120 @@ fn parse_literal(s: &str) -> Result<u64, Box<dyn Error>> {
         _ => n,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    mod parse_literal {
+        use super::super::parse_literal;
+
+        // -- Successful cases -----------------------------------------------------
+
+        #[test]
+        fn decimal_zero() {
+            assert_eq!(parse_literal("0").unwrap(), 0);
+        }
+
+        #[test]
+        fn decimal_plain() {
+            assert_eq!(parse_literal("1234").unwrap(), 1234);
+        }
+
+        #[test]
+        fn decimal_large() {
+            assert_eq!(parse_literal("4294967295").unwrap(), 4_294_967_295);
+        }
+
+        #[test]
+        fn hex_lowercase_prefix() {
+            assert_eq!(parse_literal("0x1000").unwrap(), 0x1000);
+        }
+
+        #[test]
+        fn hex_uppercase_prefix() {
+            assert_eq!(parse_literal("0X1000").unwrap(), 0x1000);
+        }
+
+        #[test]
+        fn hex_mixed_case_digits() {
+            assert_eq!(parse_literal("0xDeAdBeEf").unwrap(), 0xDEAD_BEEF);
+        }
+
+        #[test]
+        fn hex_zero() {
+            assert_eq!(parse_literal("0x0").unwrap(), 0);
+        }
+
+        #[test]
+        fn hex_large() {
+            assert_eq!(parse_literal("0x20000000").unwrap(), 0x2000_0000);
+        }
+
+        #[test]
+        fn suffix_k_lowercase() {
+            assert_eq!(parse_literal("16k").unwrap(), 16 * 1_024);
+        }
+
+        #[test]
+        fn suffix_k_uppercase() {
+            assert_eq!(parse_literal("16K").unwrap(), 16 * 1_024);
+        }
+
+        #[test]
+        fn suffix_m_lowercase() {
+            assert_eq!(parse_literal("2m").unwrap(), 2 * 1_024 * 1_024);
+        }
+
+        #[test]
+        fn suffix_m_uppercase() {
+            assert_eq!(parse_literal("2M").unwrap(), 2 * 1_024 * 1_024);
+        }
+
+        #[test]
+        fn suffix_k_zero() {
+            assert_eq!(parse_literal("0K").unwrap(), 0);
+        }
+
+        #[test]
+        fn whitespace_leading_trailing() {
+            assert_eq!(parse_literal("  256K  ").unwrap(), 256 * 1_024);
+        }
+
+        // -- Failure cases --------------------------------------------------------
+
+        #[test]
+        fn empty_string() {
+            assert!(parse_literal("").is_err());
+        }
+
+        #[test]
+        fn letters_only() {
+            assert!(parse_literal("RAM").is_err());
+        }
+
+        #[test]
+        fn suffix_without_number() {
+            assert!(parse_literal("K").is_err());
+        }
+
+        #[test]
+        fn hex_invalid_digit() {
+            assert!(parse_literal("0xGHIJ").is_err());
+        }
+
+        #[test]
+        fn float_rejected() {
+            assert!(parse_literal("1.5").is_err());
+        }
+
+        #[test]
+        fn expression_rejected() {
+            // Operators are not part of a literal; the tokenizer strips them first.
+            assert!(parse_literal("16K + 4").is_err());
+        }
+
+        #[test]
+        fn hex_prefix_only() {
+            assert!(parse_literal("0x").is_err());
+        }
+    } // mod parse_literal
+} // mod tests
