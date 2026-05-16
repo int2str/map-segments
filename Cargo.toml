@@ -17,7 +17,7 @@ name = "cargo-map-segments"
 path = "src/main.rs"
 
 [dependencies]
-cargo_metadata = "0.18"
+cargo_metadata = "0.23"
 clap = { version = "4.6.1", features = ["derive"] }
 object = "0.39.1"
 regex = "1.12"
