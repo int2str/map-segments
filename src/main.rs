@@ -249,6 +249,10 @@ fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
     }
 }
 
+fn map_range(value: u64, input_range: u64, output_range: usize) -> usize {
+    ((output_range as f64 / input_range as f64) * value as f64) as usize
+}
+
 fn print_memory(
     region_start: u64,
     region_end: u64,
@@ -257,20 +261,15 @@ fn print_memory(
     total_width: usize,
 ) {
     let region_size = region_end - region_start;
-    let bar_offset = ((total_width as f64 / region_size as f64)
-        * (block_start as f64 - region_start as f64)) as usize;
-    let bar_width = ((total_width as f64 / region_size as f64) * block_size as f64) as usize;
+    let offset = map_range(block_start - region_start, region_size, total_width);
+    let width = map_range(block_size, region_size, total_width);
 
-    let block = if bar_width == 0 {
-        "\u{258f}"
-    } else {
-        "\u{2588}"
-    };
+    let block = if width == 0 { "\u{258f}" } else { "\u{2588}" };
 
     print!(
         "[{}{}{}]",
-        " ".repeat(bar_offset),
-        block.repeat(bar_width.max(1)),
-        " ".repeat(total_width - bar_offset - bar_width)
+        " ".repeat(offset),
+        block.repeat(width.max(1)),
+        " ".repeat(total_width - offset - width.max(1)),
     );
 }
