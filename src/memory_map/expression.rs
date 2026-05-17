@@ -65,7 +65,8 @@ fn evaluate_atom(token: &Token, resolved: &[Region]) -> Result<u64, Box<dyn Erro
         let name = &groups[2];
         return match groups[1].to_ascii_uppercase().as_str() {
             "ORIGIN" => lookup(name, resolved, |r| r.start),
-            _ => lookup(name, resolved, |r| r.length),
+            "LENGTH" => lookup(name, resolved, |r| r.length),
+            _ => unreachable!(),
         };
     }
 

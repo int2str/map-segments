@@ -22,7 +22,7 @@ impl Token {
             Token::Atom(s) => s.as_str(),
             Token::Op('+') => "+",
             Token::Op('-') => "-",
-            Token::Op(_) => "",
+            Token::Op(c) => panic!("Unexpected operator '{c}'"),
         }
     }
 }
@@ -52,7 +52,7 @@ pub fn tokenise(expr: &str) -> Result<Vec<Token>, Box<dyn Error>> {
             }
             '+' | '-' if paren_depth == 0 => {
                 let atom = current.trim().to_string();
-                current = String::new();
+                current.clear();
                 if !atom.is_empty() {
                     tokens.push(Token::Atom(atom));
                 }

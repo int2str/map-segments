@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
          memory.x entry. Use --memory-map <PATH> to specify one explicitly.",
     )?;
 
-    let sections = sections::from_object_file(elf_path)?;
+    let sections = sections::from_object_file(&elf_path)?;
     let memory_map = memory_map::from_memory_x(&map_path)?;
     let width = resolve_width(arguments.width);
     map_sections(&sections, &memory_map, width);
@@ -148,15 +148,15 @@ fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Error>> 
 /// Locate memory.x by parsing the Cargo-generated `<binary>.d` dependency file
 /// that sits alongside the ELF binary. Returns `None` if the .d file is absent,
 /// unreadable, or contains no unambiguous memory.x reference.
-fn find_memory_x_via_dep_file(elf: &std::path::Path) -> Option<PathBuf> {
+fn find_memory_x_via_dep_file(elf_path: &std::path::Path) -> Option<PathBuf> {
     // <dir>/<name>.d lives next to the ELF binary.
-    let dep_file = elf.with_extension("d");
-    let content = std::fs::read_to_string(&dep_file).ok()?;
+    let dep_path = elf_path.with_extension("d");
+    let dep_file = std::fs::read_to_string(&dep_path).ok()?;
 
     // .d format:  target: dep1 dep2 \
     //               dep3 dep4
     // Join backslash-continued lines, strip the "target:" prefix, split on whitespace.
-    let joined = content
+    let joined = dep_file
         .lines()
         .map(|l| l.trim_end_matches('\\').trim())
         .collect::<Vec<_>>()
@@ -174,14 +174,14 @@ fn find_memory_x_via_dep_file(elf: &std::path::Path) -> Option<PathBuf> {
         .filter(|p| p.exists())
         .collect();
 
-    match matches.len() {
-        1 => Some(matches.into_iter().next().unwrap()),
-        0 => None,
+    match matches.as_slice() {
+        [] => None,
+        [file] => Some(file.clone()),
         _ => {
             eprintln!(
                 "Multiple memory.x files found in {}: {}. \
                  Use --memory-map to specify which one to use.",
-                dep_file.display(),
+                dep_path.display(),
                 matches
                     .iter()
                     .map(|p| p.display().to_string())
@@ -254,30 +254,23 @@ fn print_memory(
     region_end: u64,
     block_start: u64,
     block_size: u64,
-    width: usize,
+    total_width: usize,
 ) {
     let region_size = region_end - region_start;
-    let offset =
-        ((width as f64 / region_size as f64) * (block_start as f64 - region_start as f64)) as usize;
-    let w = ((width as f64 / region_size as f64) * block_size as f64) as usize;
+    let bar_offset = ((total_width as f64 / region_size as f64)
+        * (block_start as f64 - region_start as f64)) as usize;
+    let bar_width = ((total_width as f64 / region_size as f64) * block_size as f64) as usize;
 
-    let small = w == 0;
-    let w = w.max(1);
+    let block = if bar_width == 0 {
+        "\u{258f}"
+    } else {
+        "\u{2588}"
+    };
 
-    print!("[");
-
-    for _ in 0..offset {
-        print!(" ");
-    }
-    for _ in 0..w {
-        if small {
-            print!("\u{258f}");
-        } else {
-            print!("\u{2588}");
-        }
-    }
-    for _ in 0..(width - w - offset) {
-        print!(" ");
-    }
-    print!("]");
+    print!(
+        "[{}{}{}]",
+        " ".repeat(bar_offset),
+        block.repeat(bar_width.max(1)),
+        " ".repeat(total_width - bar_offset - bar_width)
+    );
 }
