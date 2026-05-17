@@ -30,6 +30,10 @@ use sections::SectionInfo;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Arguments {
+    /// Path to an ELF binary to analyse directly. Skips `cargo build` entirely.
+    #[arg(short = 'b', long, conflicts_with_all = ["bin", "example", "release"])]
+    binary: Option<PathBuf>,
+
     /// Binary target to build and analyse. If neither --bin nor --example is
     /// given, the first executable artifact produced by `cargo build` is used.
     #[arg(long, conflicts_with = "example")]
@@ -67,7 +71,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     let arguments = Arguments::parse_from(args);
 
-    let elf_path = build_and_find_elf(&arguments)?;
+    let elf_path = match arguments.binary {
+        Some(path) => path,
+        None => build_and_find_elf(&arguments)?,
+    };
 
     let map_path = arguments
         .memory_map
