@@ -225,6 +225,7 @@ dependencies = [
  "clap",
  "object",
  "regex",
+ "serde_json",
  "terminal_size",
 ]
 

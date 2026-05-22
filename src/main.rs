@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let map_path = arguments
         .memory_map
-        .or_else(|| find_memory_x_via_dep_file(&elf_path));
+        .or_else(|| find_memory_x_via_fingerprint(&elf_path));
 
     let map_path = map_path.ok_or(
         "No memory.x found. A <binary>.d dependency file was not found or contained no \
@@ -145,51 +145,98 @@ fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Error>> 
     elf_path.ok_or_else(|| "cargo build produced no executable artifact".into())
 }
 
-/// Locate memory.x by parsing the Cargo-generated `<binary>.d` dependency file
-/// that sits alongside the ELF binary. Returns `None` if the .d file is absent,
-/// unreadable, or contains no unambiguous memory.x reference.
-fn find_memory_x_via_dep_file(elf_path: &std::path::Path) -> Option<PathBuf> {
-    // <dir>/<name>.d lives next to the ELF binary.
-    let dep_path = elf_path.with_extension("d");
-    let dep_file = std::fs::read_to_string(&dep_path).ok()?;
+fn find_memory_x_via_fingerprint(elf_path: &std::path::Path) -> Option<PathBuf> {
+    // Derive the profile directory and binary name from the ELF path.
+    // Expected layout: <target_dir>/<triple>/<profile>/<name>
+    let binary_name = elf_path.file_name()?.to_str()?;
+    let binary_directory = elf_path.parent()?;
+    let fingerprint_directory = binary_directory.join(".fingerprint");
+    let build_directory = binary_directory.join("build");
 
-    // .d format:  target: dep1 dep2 \
-    //               dep3 dep4
-    // Join backslash-continued lines, strip the "target:" prefix, split on whitespace.
-    let joined = dep_file
-        .lines()
-        .map(|l| l.trim_end_matches('\\').trim())
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Step 1: find the fingerprint dir containing dep-bin-<name>.
+    // The dir is named <package_name>-{HASH}, which may differ from the binary name.
+    let dep_bin_name = format!("dep-bin-{}", binary_name);
+    let fingerprint_subdirectory = std::fs::read_dir(&fingerprint_directory)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find_map(|entry| {
+            let dep_bin = entry.path().join(&dep_bin_name);
+            if dep_bin.exists() {
+                entry.file_name().to_str().map(str::to_string)
+            } else {
+                None
+            }
+        })?;
 
-    let deps = match joined.find(':') {
-        Some(pos) => &joined[pos + 1..],
-        None => return None,
-    };
+    // Step 2: parse the fingerprint JSON to extract the build_script_build hash X.
+    // The JSON file is named bin-<name>.json inside the fingerprint dir.
+    let json_path = fingerprint_directory
+        .join(&fingerprint_subdirectory)
+        .join(format!("bin-{}.json", binary_name));
+    let json_str = std::fs::read_to_string(&json_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&json_str).ok()?;
 
-    let matches: Vec<PathBuf> = deps
-        .split_whitespace()
-        .filter(|token| token.ends_with("memory.x"))
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
-        .collect();
+    let build_script_hash_value: u64 = json["deps"]
+        .as_array()?
+        .iter()
+        .find(|dep| dep.get(1).and_then(|v| v.as_str()) == Some("build_script_build"))?
+        .get(3)?
+        .as_u64()?;
 
-    match matches.as_slice() {
-        [] => None,
-        [file] => Some(file.clone()),
-        _ => {
-            eprintln!(
-                "Multiple memory.x files found in {}: {}. \
-                 Use --memory-map to specify which one to use.",
-                dep_path.display(),
-                matches
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            None
-        }
+    // Step 3: find the run-build-script file whose hex-encoded LE u64 equals X.
+    // No idea why this needs to be byte swapped ...
+    let target_hex = format!("{:x}", build_script_hash_value.to_be());
+
+    let build_script_hash = std::fs::read_dir(&fingerprint_directory)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find_map(|entry| {
+            let run_file = entry.path().join("run-build-script-build-script-build");
+            if !run_file.exists() {
+                return None;
+            }
+            let contents = std::fs::read_to_string(&run_file).ok()?;
+            if contents.trim() == target_hex {
+                entry
+                    .file_name()
+                    .to_str()?
+                    .split('-')
+                    .next_back()
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })?;
+
+    // Recover the full directory name for the build script fingerprint.
+    // We need <crate-name>-{BS_HASH} but the crate name may differ from the binary name.
+    // Re-scan to get the full dir name matching the bs_hash suffix.
+    let build_script_directory = std::fs::read_dir(&fingerprint_directory)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find_map(|entry| {
+            let name_str = entry.file_name().to_str()?.to_string();
+            if name_str.ends_with(&format!("-{}", build_script_hash)) {
+                Some(name_str)
+            } else {
+                None
+            }
+        })?;
+
+    // Step 4: read root-output to get OUT_DIR.
+    let root_output_path = build_directory
+        .join(&build_script_directory)
+        .join("root-output");
+    let out_dir = std::fs::read_to_string(&root_output_path)
+        .ok()
+        .map(|s| PathBuf::from(s.trim()))?;
+
+    // Step 5: return OUT_DIR/memory.x if it exists.
+    let memory_x = out_dir.join("memory.x");
+    if memory_x.exists() {
+        Some(memory_x)
+    } else {
+        None
     }
 }
 
@@ -205,13 +252,11 @@ fn map_regions<'a>(
 ) -> Vec<(&'a SectionInfo, &'a memory_map::Region)> {
     let mut results: Vec<(&'a SectionInfo, &'a memory_map::Region)> = Vec::new();
     for section in sections {
-        let region = map
-            .iter()
-            .rfind(|region| {
-                let region_start = region.start;
-                let region_end = region.start + region.length;
-                region_start <= section.address && region_end >= (section.address + section.size)
-            });
+        let region = map.iter().rfind(|region| {
+            let region_start = region.start;
+            let region_end = region.start + region.length;
+            region_start <= section.address && region_end >= (section.address + section.size)
+        });
         if let Some(region) = &region {
             results.push((section, region));
         }
