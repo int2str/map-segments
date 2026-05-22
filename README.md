@@ -23,7 +23,7 @@ uses a standard GNU `memory.x` linker script.
 ## Installation
 
 ```
-cargo install cargo-map-segments
+cargo install map-segments
 ```
 
 ## Usage
@@ -48,7 +48,7 @@ cargo map-segments <ELF_BINARY> [OPTIONS]
 ## Auto-detection of `memory.x`
 
 When building with Cargo, a `<binary>.d` dependency file is generated alongside
-the ELF binary. `cargo-map-segments` parses this file to automatically locate
+the ELF binary. `map-segments` parses this file to automatically locate
 the `memory.x` that was used to link the binary — no manual path required.
 
 ```
