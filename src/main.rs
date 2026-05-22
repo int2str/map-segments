@@ -27,11 +27,34 @@ mod sections;
 
 use sections::SectionInfo;
 
+/// Build flags passed through to `cargo build` as-is (no following parameter).
+const PASSTHROUGH_FLAGS: &[&str] = &["--release", "--all-features", "--no-default-features"];
+
+/// Build flags passed through to `cargo build` together with their following parameter value.
+const PASSTHROUGH_FLAGS_WITH_PARAMETER: &[&str] = &[
+    "--bin",
+    "--example",
+    "--features",
+    "-F",
+    "--profile",
+    "--target",
+    "--package",
+    "-p",
+    "--manifest-path",
+];
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Arguments {
     /// Path to an ELF binary to analyse directly. Skips `cargo build` entirely.
-    #[arg(short = 'b', long, conflicts_with_all = ["bin", "example", "release"])]
+    #[arg(
+        short = 'b',
+        long,
+        conflicts_with_all = [
+            "bin", "example", "release", "features", "all_features",
+            "no_default_features", "profile", "target", "package", "manifest_path",
+        ]
+    )]
     binary: Option<PathBuf>,
 
     /// Binary target to build and analyse. If neither --bin nor --example is
@@ -47,8 +70,36 @@ struct Arguments {
     #[arg(long)]
     release: bool,
 
-    /// Path to a memory.x linker script. If omitted, the sibling <binary>.d
-    /// dependency file is parsed to locate memory.x automatically.
+    /// Space or comma separated list of features to activate.
+    #[arg(short = 'F', long)]
+    features: Option<String>,
+
+    /// Activate all available features.
+    #[arg(long)]
+    all_features: bool,
+
+    /// Do not activate the `default` feature.
+    #[arg(long)]
+    no_default_features: bool,
+
+    /// Build artifacts with the specified profile.
+    #[arg(long)]
+    profile: Option<String>,
+
+    /// Build for the target triple.
+    #[arg(long)]
+    target: Option<String>,
+
+    /// Package to build.
+    #[arg(short = 'p', long)]
+    package: Option<String>,
+
+    /// Path to Cargo.toml.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
+
+    /// Path to a memory.x linker script. If omitted, it is located automatically
+    /// via Cargo's fingerprint metadata.
     #[arg(short = 'm', long)]
     memory_map: Option<PathBuf>,
 
@@ -81,8 +132,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .or_else(|| find_memory_x_via_fingerprint(&elf_path));
 
     let map_path = map_path.ok_or(
-        "No memory.x found. A <binary>.d dependency file was not found or contained no \
-         memory.x entry. Use --memory-map <PATH> to specify one explicitly.",
+        "No memory.x found. Could not locate it via Cargo fingerprint metadata. \
+         Use --memory-map <PATH> to specify one explicitly.",
     )?;
 
     let sections = sections::from_object_file(&elf_path)?;
@@ -99,14 +150,15 @@ fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Error>> 
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--message-format=json"]);
 
-    if let Some(bin) = &arguments.bin {
-        cmd.args(["--bin", bin]);
-    } else if let Some(example) = &arguments.example {
-        cmd.args(["--example", example]);
+    for &flag in PASSTHROUGH_FLAGS {
+        if flag_is_set(arguments, flag) {
+            cmd.arg(flag);
+        }
     }
-
-    if arguments.release {
-        cmd.arg("--release");
+    for &flag in PASSTHROUGH_FLAGS_WITH_PARAMETER {
+        if let Some(val) = flag_value(arguments, flag) {
+            cmd.args([flag, val.as_str()]);
+        }
     }
 
     cmd.stdout(Stdio::piped());
@@ -143,6 +195,33 @@ fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Error>> 
     }
 
     elf_path.ok_or_else(|| "cargo build produced no executable artifact".into())
+}
+
+/// Returns `true` if the given boolean flag is set in `arguments`.
+fn flag_is_set(arguments: &Arguments, flag: &str) -> bool {
+    match flag {
+        "--release" => arguments.release,
+        "--all-features" => arguments.all_features,
+        "--no-default-features" => arguments.no_default_features,
+        _ => false,
+    }
+}
+
+/// Returns the value for the given parameter flag from `arguments`, or `None`.
+fn flag_value(arguments: &Arguments, flag: &str) -> Option<String> {
+    match flag {
+        "--bin" => arguments.bin.clone(),
+        "--example" => arguments.example.clone(),
+        "--features" | "-F" => arguments.features.clone(),
+        "--profile" => arguments.profile.clone(),
+        "--target" => arguments.target.clone(),
+        "--package" | "-p" => arguments.package.clone(),
+        "--manifest-path" => arguments
+            .manifest_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        _ => None,
+    }
 }
 
 fn find_memory_x_via_fingerprint(elf_path: &std::path::Path) -> Option<PathBuf> {
