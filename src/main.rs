@@ -199,33 +199,45 @@ fn resolve_width(override_width: Option<usize>) -> usize {
         .unwrap_or(120)
 }
 
-fn longest_section_name(sections: &[SectionInfo]) -> usize {
-    sections
-        .iter()
-        .map(|section| section.name.len())
-        .max()
-        .unwrap_or(0)
-}
-
-fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
-    let section_name_max_width = longest_section_name(sections);
-    let bar_width = width.saturating_sub(section_name_max_width + 30).max(1);
-    let mut last_region: Option<u64> = None;
-
+fn map_regions<'a>(
+    sections: &'a [SectionInfo],
+    map: &'a memory_map::Map,
+) -> Vec<(&'a SectionInfo, &'a memory_map::Region)> {
+    let mut results: Vec<(&'a SectionInfo, &'a memory_map::Region)> = Vec::new();
     for section in sections {
         let region = map
             .iter()
-            .filter(|region| {
+            .rfind(|region| {
                 let region_start = region.start;
                 let region_end = region.start + region.length;
                 region_start <= section.address && region_end >= (section.address + section.size)
-            })
-            .last();
+            });
+        if let Some(region) = &region {
+            results.push((section, region));
+        }
+    }
+    results
+}
 
-        if let Some(region) = &region
-            && last_region != Some(region.id)
-        {
-            println!();
+fn longest_names(region_map: &[(&SectionInfo, &memory_map::Region)]) -> (usize, usize) {
+    region_map.iter().fold((0, 0), |(section, region), (s, r)| {
+        (section.max(s.name.len()), region.max(r.name.len()))
+    })
+}
+
+fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
+    let region_map = map_regions(sections, map);
+    let (section_name_width, region_name_width) = longest_names(&region_map);
+    let bar_width = width
+        .saturating_sub(section_name_width + region_name_width + 21)
+        .max(1);
+    let mut last_region: Option<u64> = None;
+
+    for (section, region) in region_map {
+        if last_region != Some(region.id) {
+            if last_region.is_some() {
+                println!();
+            }
             last_region = Some(region.id);
         }
 
@@ -234,19 +246,17 @@ fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
             section.name,
             section.address,
             section.size,
-            width = section_name_max_width,
+            width = section_name_width,
         );
 
-        if let Some(region) = &region {
-            print!(" {:8} ", region.name);
-            print_memory(
-                region.start,
-                region.start + region.length,
-                section.address,
-                section.size,
-                bar_width,
-            );
-        }
+        print!(" {:width$} ", region.name, width = region_name_width);
+        print_memory(
+            region.start,
+            region.start + region.length,
+            section.address,
+            section.size,
+            bar_width,
+        );
 
         println!();
     }
