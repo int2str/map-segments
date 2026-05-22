@@ -213,11 +213,14 @@ fn map_sections(sections: &[SectionInfo], map: &memory_map::Map, width: usize) {
     let mut last_region: Option<u64> = None;
 
     for section in sections {
-        let region = map.iter().find(|region| {
-            let region_start = region.start;
-            let region_end = region.start + region.length;
-            region_start <= section.address && region_end >= (section.address + section.size)
-        });
+        let region = map
+            .iter()
+            .filter(|region| {
+                let region_start = region.start;
+                let region_end = region.start + region.length;
+                region_start <= section.address && region_end >= (section.address + section.size)
+            })
+            .last();
 
         if let Some(region) = &region
             && last_region != Some(region.id)
