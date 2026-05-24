@@ -3,7 +3,7 @@
 //!
 
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::Path;
 
 use object::{Object, ObjectSection, Section, SectionKind};
 
@@ -31,7 +31,7 @@ impl SectionInfo {
 ///
 /// Empty sections or sections not deemed to be included in the final binary
 /// are excluded. Results are sorted by (starting) address.
-pub fn from_object_file(filename: &PathBuf) -> Result<Vec<SectionInfo>, Box<dyn Error>> {
+pub fn from_object_file(filename: &Path) -> Result<Vec<SectionInfo>, Box<dyn Error>> {
     let binary_file = std::fs::read(filename)?;
     let object_file = object::File::parse(&*binary_file)?;
 
