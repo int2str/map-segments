@@ -29,36 +29,62 @@ cargo install map-segments
 ## Usage
 
 ```
-cargo map-segments <ELF_BINARY> [OPTIONS]
+cargo map-segments [OPTIONS]
 ```
 
-### Arguments
+Common examples:
 
-| Argument       | Description                          |
-|----------------|--------------------------------------|
-| `<ELF_BINARY>` | Path to the ELF binary to inspect    |
+```
+# Build with cargo and inspect the first executable artifact
+cargo map-segments
+
+# Build and inspect a specific target
+cargo map-segments --bin my-app
+cargo map-segments --example demo
+
+# Build with build/profile options
+cargo map-segments --release
+cargo map-segments --target thumbv7em-none-eabi --features defmt
+
+# Skip build and inspect an existing ELF directly
+cargo map-segments --binary target/thumbv7em-none-eabi/debug/my-firmware
+
+# Provide memory.x explicitly
+cargo map-segments --memory-map path/to/memory.x
+```
 
 ### Options
 
-| Option                      | Description                                                                                                                                  |
-|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `-m`, `--memory-map <PATH>` | Path to a `memory.x` linker script. If omitted, the sibling `<binary>.d` dependency file is parsed to locate `memory.x` automatically.       |
-| `-w`, `--width <COLS>`      | Output width in columns. Defaults to the current terminal width, or 120 if stdout is not a terminal.                                         |
+| Option | Description |
+|---|---|
+| `-b`, `--binary <BINARY>` | Path to an ELF binary to analyse directly. Skips `cargo build` entirely. |
+| `--bin <BIN>` | Binary target to build and analyse. |
+| `--example <EXAMPLE>` | Example target to build and analyse. |
+| `--release` | Build in release mode (default: debug). |
+| `-F`, `--features <FEATURES>` | Space- or comma-separated list of features to activate. |
+| `--all-features` | Activate all available features. |
+| `--no-default-features` | Do not activate the `default` feature. |
+| `--profile <PROFILE>` | Build artifacts with the specified profile. |
+| `--target <TARGET>` | Build for the target triple. |
+| `-p`, `--package <PACKAGE>` | Package to build. |
+| `--manifest-path <MANIFEST_PATH>` | Path to `Cargo.toml`. |
+| `-m`, `--memory-map <MEMORY_MAP>` | Path to a `memory.x` linker script. If omitted, it is located automatically via Cargo fingerprint metadata. |
+| `-w`, `--width <WIDTH>` | Output width in columns. Defaults to terminal width, or 120 if stdout is not a terminal. |
 
 ## Auto-detection of `memory.x`
 
-When building with Cargo, a `<binary>.d` dependency file is generated alongside
-the ELF binary. `map-segments` parses this file to automatically locate
-the `memory.x` that was used to link the binary — no manual path required.
+When building with Cargo, `map-segments` inspects Cargo fingerprint metadata
+to locate the `memory.x` copied into the build script output directory
+(`OUT_DIR/memory.x`).
 
 ```
-cargo map-segments target/thumbv7em-none-eabi/debug/my-firmware
+cargo map-segments --bin my-firmware
 ```
 
 If auto-detection fails, specify the path explicitly:
 
 ```
-cargo map-segments target/thumbv7em-none-eabi/debug/my-firmware \
+cargo map-segments --binary target/thumbv7em-none-eabi/debug/my-firmware \
     --memory-map memory.x
 ```
 
