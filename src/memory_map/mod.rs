@@ -32,7 +32,7 @@ pub struct Region {
 }
 
 impl Region {
-    pub fn ends_at(self: &Self) -> u64 {
+    pub fn ends_at(&self) -> u64 {
         self.start.saturating_add(self.length)
     }
 }

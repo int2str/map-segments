@@ -25,11 +25,11 @@ impl SectionInfo {
         }
     }
 
-    pub fn starts_at(self: &Self) -> u64 {
+    pub fn starts_at(&self) -> u64 {
         self.address
     }
 
-    pub fn ends_at(self: &Self) -> u64 {
+    pub fn ends_at(&self) -> u64 {
         self.address.saturating_add(self.size)
     }
 }
