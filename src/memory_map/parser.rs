@@ -92,10 +92,8 @@ fn parse_regions(block: &str) -> Result<Vec<Region>, Box<dyn Error>> {
             let name = caps["name"].to_string();
             let origin_val = evaluate_expression(caps["origin"].trim(), &regions)?;
             let length_val = evaluate_expression(caps["length"].trim(), &regions)?;
-            let id = regions.len() as u64;
             regions.push(Region {
                 name,
-                id,
                 start: origin_val,
                 length: length_val,
             });

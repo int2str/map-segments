@@ -25,13 +25,16 @@ pub type Map = Vec<Region>;
 pub struct Region {
     /// Region name as it appears in the linker script.
     pub name: String,
-    /// Sequential index assigned in file order; used to insert blank lines
-    /// between regions in the output.
-    pub id: u64,
     /// Start address (`ORIGIN`).
     pub start: u64,
     /// Length in bytes (`LENGTH`).
     pub length: u64,
+}
+
+impl Region {
+    pub fn ends_at(self: &Self) -> u64 {
+        self.start.saturating_add(self.length)
+    }
 }
 
 /// Parse a `memory.x` linker script file into a [`Map`].

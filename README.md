@@ -46,6 +46,9 @@ cargo map-segments --example demo
 cargo map-segments --release
 cargo map-segments --target thumbv7em-none-eabi --features defmt
 
+# Use vertical rendering style
+cargo map-segments -v
+
 # Skip build and inspect an existing ELF directly
 cargo map-segments --binary target/thumbv7em-none-eabi/debug/my-firmware
 
@@ -70,6 +73,7 @@ cargo map-segments --memory-map path/to/memory.x
 | `--manifest-path <MANIFEST_PATH>` | Path to `Cargo.toml`. |
 | `-m`, `--memory-map <MEMORY_MAP>` | Path to a `memory.x` linker script. If omitted, it is located automatically via Cargo fingerprint metadata. |
 | `-w`, `--width <WIDTH>` | Output width in columns. Defaults to terminal width, or 120 if stdout is not a terminal. |
+| `-v`, `--vertical` | Render memory as vertically stacked address space. |
 
 ## Auto-detection of `memory.x`
 
@@ -97,6 +101,25 @@ Standard GNU linker script `MEMORY` blocks are supported, including:
 - `+` and `-` arithmetic expressions
 - `ORIGIN(NAME)` and `LENGTH(NAME)` cross-region references
 - `/* */` block comments and `//` line comments
+
+## Vertical view
+
+`-v` / `--vertical` renders each memory region as a top-to-bottom address range
+(low addresses at the top), with section details shown on the right.
+
+```
+FLASH 00000000..00080000 (13% used; 54kb / 512kb)
+      Scale: 1 character = 4096 bytes, row = 32768 bytes
+      00000000 [▏▏▏▏▏▏▏▏        ] .vector_table, .text, .rodata
+      00008000 [████████▌       ] .text, .rodata
+      00010000 [▌               ] .rodata
+      00018000 [                ]
+
+RAM   20000000..20020000 (1% used; 2kb / 128kb)
+      Scale: 1 character = 1024 bytes, row = 8192 bytes
+      20000000 [▎▉▊             ] .data, .bss, .uninit
+      20002000 [                ]
+```
 
 ## License
 

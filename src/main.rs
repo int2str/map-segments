@@ -20,13 +20,12 @@ use terminal_size::{Width, terminal_size};
 
 mod arguments;
 mod builder;
+mod layout;
 mod memory_map;
 mod render;
 mod sections;
 
 use arguments::Arguments;
-use memory_map::Region;
-use sections::SectionInfo;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = arguments::parse();
@@ -47,30 +46,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let sections = sections::from_object_file(&elf_path)?;
     let memory_map = memory_map::from_memory_x(&map_path)?;
-    let region_map = map_regions(&sections, &memory_map);
+    let region_layouts = layout::map_sections_to_regions(&sections, &memory_map);
 
     let width = arguments
         .width
         .or_else(|| terminal_size().map(|(Width(w), _)| w as usize))
         .unwrap_or(120);
 
-    render::print_map(region_map, width);
+    if arguments.vertical {
+        render::print_vertical_map(&region_layouts, width);
+    } else {
+        render::print_horizontal_map(&region_layouts, width);
+    }
     Ok(())
-}
-
-fn map_regions<'a>(
-    sections: &'a [SectionInfo],
-    map: &'a memory_map::Map,
-) -> Vec<(&'a SectionInfo, &'a Region)> {
-    sections
-        .iter()
-        .filter_map(|section| {
-            map.iter()
-                .rfind(|region| {
-                    region.start <= section.address
-                        && region.start + region.length >= section.address + section.size
-                })
-                .map(|region| (section, region))
-        })
-        .collect()
 }

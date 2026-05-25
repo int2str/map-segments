@@ -66,6 +66,10 @@ pub struct Arguments {
     /// if stdout is not a terminal (e.g. redirected to a file).
     #[arg(short, long)]
     pub width: Option<usize>,
+
+    /// Render memory as vertically stacked address space.
+    #[arg(short = 'v', long)]
+    pub vertical: bool,
 }
 
 pub fn parse() -> Arguments {
