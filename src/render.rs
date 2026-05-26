@@ -14,7 +14,7 @@ struct VerticalRow {
 pub fn print_horizontal_map(region_layouts: &[RegionLayout<'_>], width: usize) {
     let (section_name_width, region_name_width) = longest_names(region_layouts);
     let bar_width = width
-        .saturating_sub(section_name_width + region_name_width + 21)
+        .saturating_sub(section_name_width + region_name_width + 23)
         .max(1);
 
     for (index, layout) in region_layouts
@@ -26,6 +26,14 @@ pub fn print_horizontal_map(region_layouts: &[RegionLayout<'_>], width: usize) {
             println!();
         }
 
+        println!(
+            "{} ({}% used; {}kb / {}kb)",
+            layout.region.name,
+            usage_percent(layout.used_bytes, layout.region.length),
+            bytes_to_kb(layout.used_bytes),
+            bytes_to_kb(layout.region.length),
+        );
+
         for section in &layout.sections {
             let bar = build_horizontal_bar(
                 layout.region.start,
@@ -36,7 +44,7 @@ pub fn print_horizontal_map(region_layouts: &[RegionLayout<'_>], width: usize) {
             );
 
             println!(
-                "{:section_width$} {:08x} {:7} {:region_width$} {}",
+                "  {:section_width$} {:08x} {:7} {:region_width$} {}",
                 section.name,
                 section.address,
                 section.size,
