@@ -180,8 +180,8 @@ fn build_vertical_rows(
                 .as_slice()
                 .iter()
                 .filter(|section| section_in_range(section, row_start, row_end))
-                .map(|section| section.name.clone())
-                .collect::<Vec<String>>()
+                .map(|section| section.name.as_str())
+                .collect::<Vec<_>>()
                 .join(", ");
             VerticalRow {
                 start: row_start,

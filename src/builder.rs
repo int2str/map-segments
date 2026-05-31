@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use cargo_metadata::Message;
@@ -75,18 +75,36 @@ pub fn build_and_find_elf(arguments: &Arguments) -> Result<PathBuf, Box<dyn Erro
     elf_path.ok_or_else(|| "cargo build produced no executable artifact".into())
 }
 
-pub fn find_memory_x(elf_path: &std::path::Path) -> Option<PathBuf> {
+pub fn find_memory_x(elf_path: &Path) -> Option<PathBuf> {
     // Derive the profile directory and binary name from the ELF path.
-    // Expected layout: <target_dir>/<triple>/<profile>/<name>
+    // Expected layout: <target_directory>/<triple>/<profile>/<name>
     let binary_name = elf_path.file_name()?.to_str()?;
     let binary_directory = elf_path.parent()?;
     let fingerprint_directory = binary_directory.join(".fingerprint");
     let build_directory = binary_directory.join("build");
 
-    // Step 1: find the fingerprint dir containing dep-bin-<name>.
-    // The dir is named <package_name>-{HASH}, which may differ from the binary name.
+    let binary_fingerprint_directory =
+        find_binary_fingerprint_directory(&fingerprint_directory, binary_name)?;
+    let build_script_hash = build_script_hash_from_fingerprint(
+        &fingerprint_directory,
+        &binary_fingerprint_directory,
+        binary_name,
+    )?;
+    let build_script_fingerprint_directory =
+        find_build_script_fingerprint_directory(&fingerprint_directory, build_script_hash)?;
+    let out_directory = read_root_output(&build_directory, &build_script_fingerprint_directory)?;
+
+    let memory_x = out_directory.join("memory.x");
+    memory_x.exists().then_some(memory_x)
+}
+
+fn find_binary_fingerprint_directory(
+    fingerprint_directory: &Path,
+    binary_name: &str,
+) -> Option<String> {
+    // The directory is named <package_name>-{HASH}, which may differ from the binary name.
     let dep_bin_name = format!("dep-bin-{}", binary_name);
-    let fingerprint_subdirectory = std::fs::read_dir(&fingerprint_directory)
+    std::fs::read_dir(fingerprint_directory)
         .ok()?
         .filter_map(|e| e.ok())
         .find_map(|entry| {
@@ -96,28 +114,35 @@ pub fn find_memory_x(elf_path: &std::path::Path) -> Option<PathBuf> {
             } else {
                 None
             }
-        })?;
+        })
+}
 
-    // Step 2: parse the fingerprint JSON to extract the build_script_build hash X.
-    // The JSON file is named bin-<name>.json inside the fingerprint dir.
+fn build_script_hash_from_fingerprint(
+    fingerprint_directory: &Path,
+    fingerprint_subdirectory: &str,
+    binary_name: &str,
+) -> Option<u64> {
     let json_path = fingerprint_directory
-        .join(&fingerprint_subdirectory)
+        .join(fingerprint_subdirectory)
         .join(format!("bin-{}.json", binary_name));
     let json_str = std::fs::read_to_string(&json_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&json_str).ok()?;
 
-    let build_script_hash_value: u64 = json["deps"]
+    json["deps"]
         .as_array()?
         .iter()
         .find(|dep| dep.get(1).and_then(|v| v.as_str()) == Some("build_script_build"))?
         .get(3)?
-        .as_u64()?;
+        .as_u64()
+}
 
-    // Step 3: find the run-build-script file whose contents match hash X, and
-    // return the full fingerprint directory name (<crate-name>-{BS_HASH}).
-    let target_hex = format!("{:x}", build_script_hash_value.to_be());
+fn find_build_script_fingerprint_directory(
+    fingerprint_directory: &Path,
+    build_script_hash: u64,
+) -> Option<String> {
+    let target_hex = format!("{:x}", build_script_hash.to_be());
 
-    let build_script_directory = std::fs::read_dir(&fingerprint_directory)
+    std::fs::read_dir(fingerprint_directory)
         .ok()?
         .filter_map(|e| e.ok())
         .find_map(|entry| {
@@ -131,23 +156,16 @@ pub fn find_memory_x(elf_path: &std::path::Path) -> Option<PathBuf> {
             } else {
                 None
             }
-        })?;
+        })
+}
 
-    // Step 4: read root-output to get OUT_DIR.
+fn read_root_output(build_directory: &Path, build_script_directory: &str) -> Option<PathBuf> {
     let root_output_path = build_directory
-        .join(&build_script_directory)
+        .join(build_script_directory)
         .join("root-output");
-    let out_dir = std::fs::read_to_string(&root_output_path)
+    std::fs::read_to_string(&root_output_path)
         .ok()
-        .map(|s| PathBuf::from(s.trim()))?;
-
-    // Step 5: return OUT_DIR/memory.x if it exists.
-    let memory_x = out_dir.join("memory.x");
-    if memory_x.exists() {
-        Some(memory_x)
-    } else {
-        None
-    }
+        .map(|s| PathBuf::from(s.trim()))
 }
 
 fn flag_is_set(arguments: &Arguments, flag: &str) -> bool {
