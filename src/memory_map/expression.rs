@@ -10,67 +10,142 @@
 
 use std::error::Error;
 
-use regex::Regex;
-
 use super::Region;
-use super::tokenizer::{Token, tokenise};
+use super::tokenizer::Token;
+#[cfg(test)]
+use super::tokenizer::tokenize;
+
+enum Operator {
+    Plus,
+    Minus,
+}
+
+struct Parser<'a> {
+    tokens: &'a [Token],
+    index: usize,
+    resolved: &'a [Region],
+}
 
 /// Evaluate a `memory.x` expression and return its value.
 ///
 /// `resolved` is the list of regions already parsed; it is used to look up
 /// `ORIGIN(NAME)` and `LENGTH(NAME)` references.
-pub fn evaluate_expression(expression: &str, resolved: &[Region]) -> Result<u64, Box<dyn Error>> {
-    let tokens = tokenise(expression)?;
+#[cfg(test)]
+fn evaluate_expression(expression: &str, resolved: &[Region]) -> Result<u64, Box<dyn Error>> {
+    let tokens = tokenize(expression)?;
+    evaluate_tokens(&tokens, resolved)
+}
+
+pub(super) fn evaluate_tokens(
+    tokens: &[Token],
+    resolved: &[Region],
+) -> Result<u64, Box<dyn Error>> {
     if tokens.is_empty() {
-        return Err(format!("Empty expression: '{expression}'").into());
+        return Err("Empty expression".into());
     }
 
-    // Evaluate left-to-right: value (op value)*
-    let mut token_iterator = tokens.into_iter();
-    let first_token = token_iterator.next().unwrap();
-    let mut result = evaluate_atom(&first_token, resolved)?;
+    let mut parser = Parser {
+        tokens,
+        index: 0,
+        resolved,
+    };
+    let value = parser.parse_expression()?;
+    parser.expect_end()?;
+    Ok(value)
+}
 
-    while let Some(op) = token_iterator.next() {
-        let operand_tok = token_iterator
-            .next()
-            .ok_or_else(|| format!("Missing operand after operator in '{expression}'"))?;
-        let operand = evaluate_atom(&operand_tok, resolved)?;
-        match op.as_str() {
-            "+" => result = result.wrapping_add(operand),
-            "-" => result = result.wrapping_sub(operand),
-            other => return Err(format!("Unknown operator '{other}' in '{expression}'").into()),
+impl<'a> Parser<'a> {
+    fn parse_expression(&mut self) -> Result<u64, Box<dyn Error>> {
+        let mut result = self.parse_value()?;
+
+        while let Some(operator) = self.next_operator() {
+            let operand = self.parse_value()?;
+            match operator {
+                Operator::Plus => result = result.wrapping_add(operand),
+                Operator::Minus => result = result.wrapping_sub(operand),
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn parse_value(&mut self) -> Result<u64, Box<dyn Error>> {
+        match self.next() {
+            Some(Token::Number(value)) => Ok(value),
+            Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("ORIGIN") => {
+                self.parse_region_reference(|region| region.start)
+            }
+            Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("LENGTH") => {
+                self.parse_region_reference(|region| region.length)
+            }
+            Some(Token::Identifier(name)) => Err(format!("Unexpected identifier '{name}'").into()),
+            Some(Token::LeftParen) => {
+                let value = self.parse_expression()?;
+                self.expect_right_paren()?;
+                Ok(value)
+            }
+            Some(token) => Err(format!("Expected value, found {token:?}").into()),
+            None => Err("Expected value, found end of expression".into()),
         }
     }
 
-    Ok(result)
-}
-
-/// Evaluate a single atom token.
-///
-/// Handles parenthesised sub-expressions, `ORIGIN(NAME)` / `LENGTH(NAME)`
-/// calls, and plain numeric literals.
-fn evaluate_atom(token: &Token, resolved: &[Region]) -> Result<u64, Box<dyn Error>> {
-    let token_string = token.as_str().trim();
-
-    // Parenthesised sub-expression: ( ... )
-    if token_string.starts_with('(') && token_string.ends_with(')') {
-        return evaluate_expression(&token_string[1..token_string.len() - 1], resolved);
-    }
-
-    // ORIGIN(NAME) or LENGTH(NAME)
-    if let Some(groups) = Regex::new(r"(?i)^(ORIGIN|LENGTH)\(([A-Za-z_]\w*)\)$")
-        .unwrap()
-        .captures(token_string)
-    {
-        let name = &groups[2];
-        return match groups[1].to_ascii_uppercase().as_str() {
-            "ORIGIN" => lookup(name, resolved, |r| r.start),
-            "LENGTH" => lookup(name, resolved, |r| r.length),
-            _ => unreachable!(),
+    fn parse_region_reference(&mut self, field: fn(&Region) -> u64) -> Result<u64, Box<dyn Error>> {
+        self.expect_left_paren()?;
+        let name = match self.next() {
+            Some(Token::Identifier(name)) => name,
+            Some(token) => return Err(format!("Expected region name, found {token:?}").into()),
+            None => return Err("Expected region name, found end of expression".into()),
         };
+        self.expect_right_paren()?;
+        lookup(&name, self.resolved, field)
     }
 
-    parse_literal(token_string)
+    fn next_operator(&mut self) -> Option<Operator> {
+        match self.peek() {
+            Some(Token::Plus) => {
+                self.index += 1;
+                Some(Operator::Plus)
+            }
+            Some(Token::Minus) => {
+                self.index += 1;
+                Some(Operator::Minus)
+            }
+            _ => None,
+        }
+    }
+
+    fn expect_left_paren(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.next() {
+            Some(Token::LeftParen) => Ok(()),
+            Some(token) => Err(format!("Expected '(', found {token:?}").into()),
+            None => Err("Expected '(', found end of expression".into()),
+        }
+    }
+
+    fn expect_right_paren(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.next() {
+            Some(Token::RightParen) => Ok(()),
+            Some(token) => Err(format!("Expected ')', found {token:?}").into()),
+            None => Err("Expected ')', found end of expression".into()),
+        }
+    }
+
+    fn expect_end(&self) -> Result<(), Box<dyn Error>> {
+        match self.peek() {
+            None => Ok(()),
+            Some(token) => Err(format!("Unexpected token {token:?}").into()),
+        }
+    }
+
+    fn next(&mut self) -> Option<Token> {
+        let token = self.peek()?.clone();
+        self.index += 1;
+        Some(token)
+    }
+
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.index)
+    }
 }
 
 /// Look up a region by name and extract a field value.
@@ -86,142 +161,71 @@ fn lookup(
         .ok_or_else(|| format!("Reference to unknown region '{name}'").into())
 }
 
-/// Parse a plain numeric literal with an optional `K` or `M` suffix.
-pub(super) fn parse_literal(s: &str) -> Result<u64, Box<dyn Error>> {
-    let re = Regex::new(r"(?i)^(0x[0-9a-f]+|\d+)\s*([km]?)$").unwrap();
-    let groups = re
-        .captures(s.trim())
-        .ok_or_else(|| format!("Invalid numeric literal: '{s}'"))?;
-
-    let n = {
-        let raw = &groups[1];
-        if raw.starts_with("0x") || raw.starts_with("0X") {
-            u64::from_str_radix(&raw[2..], 16)?
-        } else {
-            raw.parse::<u64>()?
-        }
-    };
-
-    Ok(match groups[2].to_ascii_lowercase().as_str() {
-        "k" => n * 1_024,
-        "m" => n * 1_024 * 1_024,
-        _ => n,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    mod parse_literal {
-        use super::super::parse_literal;
+    use super::evaluate_expression;
+    use crate::memory_map::Region;
 
-        // -- Successful cases -----------------------------------------------------
+    fn ram_region() -> Vec<Region> {
+        vec![Region {
+            name: "RAM".to_string(),
+            start: 0x2000_0000,
+            length: 64 * 1_024,
+        }]
+    }
 
-        #[test]
-        fn decimal_zero() {
-            assert_eq!(parse_literal("0").unwrap(), 0);
-        }
+    #[test]
+    fn evaluates_number() {
+        assert_eq!(evaluate_expression("16K", &[]).unwrap(), 16 * 1_024);
+    }
 
-        #[test]
-        fn decimal_plain() {
-            assert_eq!(parse_literal("1234").unwrap(), 1234);
-        }
+    #[test]
+    fn evaluates_left_to_right_expression() {
+        assert_eq!(
+            evaluate_expression("16K + 4 - 2", &[]).unwrap(),
+            16 * 1_024 + 2
+        );
+    }
 
-        #[test]
-        fn decimal_large() {
-            assert_eq!(parse_literal("4294967295").unwrap(), 4_294_967_295);
-        }
+    #[test]
+    fn evaluates_parenthesised_expression() {
+        assert_eq!(
+            evaluate_expression("(16K + 4) - 2", &[]).unwrap(),
+            16 * 1_024 + 2
+        );
+    }
 
-        #[test]
-        fn hex_lowercase_prefix() {
-            assert_eq!(parse_literal("0x1000").unwrap(), 0x1000);
-        }
+    #[test]
+    fn evaluates_origin_reference() {
+        assert_eq!(
+            evaluate_expression("ORIGIN(RAM)", &ram_region()).unwrap(),
+            0x2000_0000
+        );
+    }
 
-        #[test]
-        fn hex_uppercase_prefix() {
-            assert_eq!(parse_literal("0X1000").unwrap(), 0x1000);
-        }
+    #[test]
+    fn evaluates_length_reference() {
+        assert_eq!(
+            evaluate_expression("LENGTH(RAM)", &ram_region()).unwrap(),
+            64 * 1_024
+        );
+    }
 
-        #[test]
-        fn hex_mixed_case_digits() {
-            assert_eq!(parse_literal("0xDeAdBeEf").unwrap(), 0xDEAD_BEEF);
-        }
+    #[test]
+    fn ignores_whitespace() {
+        assert_eq!(
+            evaluate_expression(" ORIGIN ( RAM ) + 16 K ", &ram_region()).unwrap(),
+            0x2000_0000 + 16 * 1_024
+        );
+    }
 
-        #[test]
-        fn hex_zero() {
-            assert_eq!(parse_literal("0x0").unwrap(), 0);
-        }
+    #[test]
+    fn rejects_unknown_region() {
+        assert!(evaluate_expression("ORIGIN(FLASH)", &ram_region()).is_err());
+    }
 
-        #[test]
-        fn hex_large() {
-            assert_eq!(parse_literal("0x20000000").unwrap(), 0x2000_0000);
-        }
-
-        #[test]
-        fn suffix_k_lowercase() {
-            assert_eq!(parse_literal("16k").unwrap(), 16 * 1_024);
-        }
-
-        #[test]
-        fn suffix_k_uppercase() {
-            assert_eq!(parse_literal("16K").unwrap(), 16 * 1_024);
-        }
-
-        #[test]
-        fn suffix_m_lowercase() {
-            assert_eq!(parse_literal("2m").unwrap(), 2 * 1_024 * 1_024);
-        }
-
-        #[test]
-        fn suffix_m_uppercase() {
-            assert_eq!(parse_literal("2M").unwrap(), 2 * 1_024 * 1_024);
-        }
-
-        #[test]
-        fn suffix_k_zero() {
-            assert_eq!(parse_literal("0K").unwrap(), 0);
-        }
-
-        #[test]
-        fn whitespace_leading_trailing() {
-            assert_eq!(parse_literal("  256K  ").unwrap(), 256 * 1_024);
-        }
-
-        // -- Failure cases --------------------------------------------------------
-
-        #[test]
-        fn empty_string() {
-            assert!(parse_literal("").is_err());
-        }
-
-        #[test]
-        fn letters_only() {
-            assert!(parse_literal("RAM").is_err());
-        }
-
-        #[test]
-        fn suffix_without_number() {
-            assert!(parse_literal("K").is_err());
-        }
-
-        #[test]
-        fn hex_invalid_digit() {
-            assert!(parse_literal("0xGHIJ").is_err());
-        }
-
-        #[test]
-        fn float_rejected() {
-            assert!(parse_literal("1.5").is_err());
-        }
-
-        #[test]
-        fn expression_rejected() {
-            // Operators are not part of a literal; the tokenizer strips them first.
-            assert!(parse_literal("16K + 4").is_err());
-        }
-
-        #[test]
-        fn hex_prefix_only() {
-            assert!(parse_literal("0x").is_err());
-        }
-    } // mod parse_literal
-} // mod tests
+    #[test]
+    fn rejects_trailing_tokens() {
+        assert!(evaluate_expression("16K 4", &[]).is_err());
+    }
+}
